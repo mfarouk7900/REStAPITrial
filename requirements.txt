@@ -1,0 +1,12 @@
+--only-binary :all:
+streamlit
+joblib
+pandas
+numpy
+scikit-learn==1.6.1
+category-encoders
+lightgbm
+xgboost
+imbalanced-learn
+statsmodels
+patsy
