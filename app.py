@@ -1,13 +1,36 @@
-import streamlit as st
+import os
+import joblib
 import pandas as pd
 import numpy as np
-import requests
+import streamlit as st
+import imblearn  # إجباري لفك وتشغيل الـ Pipeline
 
 st.set_page_config(
     page_title="Telecom Customer Churn Predictor",
     page_icon="📊",
     layout="wide"
 )
+
+# 🌟 خطوة تحميل الموديل مباشرة داخل الـ Streamlit دون الحاجة لسيرفر خارجي
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "churn_model (1).joblib")
+
+@st.cache_resource # لتسريع التطبيق وتحميل الموديل مرة واحدة فقط في الذاكرة
+def load_my_model():
+    try:
+        loaded_object = joblib.load(MODEL_PATH)
+        if isinstance(loaded_object, dict):
+            m = loaded_object.get('model') or loaded_object.get('classifier') or loaded_object.get('pipeline')
+            if m is None:
+                m = list(loaded_object.values())[0]
+        else:
+            m = loaded_object
+        return m
+    except Exception as e:
+        st.error(f"❌ خطأ في تحميل ملف الموديل بالسيرفر: {e}")
+        return None
+
+model = load_my_model()
 
 st.title("📱 AI-Enhanced Data Pipeline for Customer Churn Prediction")
 st.markdown("---")
@@ -47,53 +70,84 @@ with tab1:
         arr_network_quality_score = st.number_input("Arrondissement Network Quality Score", value=82.0)
 
     if st.button("🔮 Predict Churn Risk"):
-        customer_payload = {
-            "montant": float(montant),
-            "frequence_rech": float(frequence_rech),
-            "revenue": float(revenue),
-            "arpu_segment": float(arpu_segment),
-            "frequence": float(frequence),
-            "data_volume": float(data_volume),
-            "on_net": float(on_net),
-            "orange": float(orange),
-            "tigo": float(tigo),
-            "regularity": float(regularity),
-            "freq_top_pack": float(freq_top_pack),
-            "region_tower_count": float(region_tower_count),
-            "region_avg_range": float(region_avg_range),
-            "region_avg_samples": float(region_avg_samples),
-            "region_coverage_index": float(region_coverage_index),
-            "region_network_quality_score": float(region_network_quality_score),
-            "arr_network_quality_score": float(arr_network_quality_score)
-        }
-        
-        api_url = "http://127.0.0.1:8000/predict"
-        
-        try:
-            with st.spinner("جاري الاتصال بـ REST API وحساب التوقع بالنموذج..."):
-                response = requests.post(api_url, json=customer_payload)
-            
-            if response.status_code == 200:
-                response_data = response.json()
-                if response_data and "prediction" in response_data:
-                    result = response_data["prediction"]
+        if model is None:
+            st.error("النموذج غير محمل بشكل صحيح على السيرفر.")
+        else:
+            try:
+                with st.spinner("جاري حساب الـ Feature Engineering والـ 35 متغير داخلياً..."):
+                    # 1. تأمين تحويل الأنواع الرقمية
+                    m_val = float(montant)
+                    f_rech_val = float(frequence_rech)
+                    rev_val = float(revenue)
+                    arpu_val = float(arpu_segment)
+                    freq_val = float(frequence)
+                    data_val = float(data_volume)
+                    on_net_val = float(on_net)
+                    orange_val = float(orange)
+                    tigo_val = float(tigo)
+                    reg_val = float(regularity)
+                    top_pack_val = float(freq_top_pack)
+                    
+                    # 2. حساب المتغيرات الـ 18 الإضافية هندسياً بدقة
+                    avg_recharge_amount = m_val / f_rech_val if f_rech_val > 0 else 0.0
+                    avg_revenue_per_tx = rev_val / freq_val if freq_val > 0 else 0.0
+                    is_data_user = 1.0 if data_val > 0 else 0.0
+                    no_data_flag = 1.0 if data_val == 0 else 0.0
+                    is_loyal = 1.0 if reg_val >= 15 else 0.0
+                    engagement_score = (freq_val * reg_val) / 30.0
+                    network_quality_delta = float(arr_network_quality_score) - float(region_network_quality_score)
+                    
+                    # التحويلات اللوغاريتمية الآمنة
+                    log_montant = float(np.log1p(m_val))
+                    log_revenue = float(np.log1p(rev_val))
+                    log_on_net = float(np.log1p(on_net_val))
+                    log_orange = float(np.log1p(orange_val))
+                    log_tigo = float(np.log1p(tigo_val))
+                    log_data_volume = float(np.log1p(data_val))
+                    log_freq_top_pack = float(np.log1p(top_pack_val))
+                    log_avg_recharge_amount = float(np.log1p(avg_recharge_amount))
+                    log_avg_revenue_per_tx = float(np.log1p(avg_revenue_per_tx))
+                    
+                    # 3. بناء الـ DataFrame الكامل بالـ 35 عمود بالأسماء النصية الصارمة للموديل
+                    features_dict = {
+                        'montant': m_val, 'frequence_rech': f_rech_val, 'revenue': rev_val,
+                        'arpu_segment': arpu_val, 'frequence': freq_val, 'data_volume': data_val,
+                        'on_net': on_net_val, 'orange': orange_val, 'tigo': tigo_val, 'regularity': reg_val,
+                        'freq_top_pack': top_pack_val, 'region_tower_count': float(region_tower_count),
+                        'region_avg_range': float(region_avg_range), 'region_avg_samples': float(region_avg_samples),
+                        'region_coverage_index': float(region_coverage_index), 
+                        'region_network_quality_score': float(region_network_quality_score),
+                        'arr_network_quality_score': float(arr_network_quality_score),
+                        
+                        'log_avg_revenue_per_tx': log_avg_revenue_per_tx, 'log_revenue': log_revenue,
+                        'is_data_user': is_data_user, 'avg_recharge_amount': avg_recharge_amount,
+                        'log_tigo': log_tigo, 'log_on_net': log_on_net, 'no_data_flag': no_data_flag,
+                        'log_avg_recharge_amount': log_avg_recharge_amount, 'log_freq_top_pack': log_freq_top_pack,
+                        'avg_revenue_per_tx': avg_revenue_per_tx, 'log_data_volume': log_data_volume,
+                        'is_loyal': is_loyal, 'log_montant': log_montant, 'engagement_score': engagement_score,
+                        'log_orange': log_orange, 'network_quality_delta': network_quality_delta,
+                        'region': 'UNKNOWN',
+                        'top_pack': 'UNKNOWN'
+                    }
+                    
+                    input_df = pd.DataFrame([features_dict])
+                    
+                    # 4. التنبؤ مباشرة
+                    prediction = int(model.predict(input_df)[0])
+                    probability = float(model.predict_proba(input_df)[0][1]) if hasattr(model, 'predict_proba') else (1.0 if prediction == 1 else 0.0)
+                    
+                    churn_risk = "High Risk" if prediction == 1 else "Low Risk"
                     
                     st.markdown("---")
-                    if result["churn_risk"] == "High Risk":
-                        st.error(f"⚠️ **Prediction: {result['churn_risk']}**")
+                    if churn_risk == "High Risk":
+                        st.error(f"⚠️ **Prediction: {churn_risk}**")
                     else:
-                        st.success(f"✅ **Prediction: {result['churn_risk']}**")
+                        st.success(f"✅ **Prediction: {churn_risk}**")
                         
-                    st.metric(label="Churn Probability", value=f"{round(result['churn_probability'] * 100, 2)}%")
-                    st.info(f"💡 **Suggested Corporate Action:** {result['suggested_action']}")
-                else:
-                    st.error("الـ API أرجع استجابة بتنسيق غير متوقع.")
-            else:
-                error_detail = response.json().get('detail', 'خطأ غير معروف')
-                st.error(f"❌ خطأ من سيرفر الـ API: {error_detail}")
-                
-        except requests.exceptions.ConnectionError:
-            st.error("❌ فشل الاتصال بالـ REST API. تأكد من تشغيل أمر uvicorn api:app --reload أولاً!")
+                    st.metric(label="Churn Probability", value=f"{round(probability * 100, 2)}%")
+                    st.info(f"💡 **Suggested Corporate Action:** {'إرسال عرض ترويجي مخصص وتوفير باقة إنترنت إضافية' if churn_risk == 'High Risk' else 'العميل مستقر حالياً'}")
+            except Exception as e:
+                st.error(f"❌ فشل الموديل في معالجة الـ DataFrame داخلياً: {str(e)}")
 
 with tab2:
     st.header("Financial Feasibility & Business ROI")
